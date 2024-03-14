@@ -1,30 +1,31 @@
 use crate::task::load_config;
 use bili_lib::{Order, Project};
-use eframe::{App, CreationContext, egui, Storage};
-use eframe::egui::{FontData, FontFamily, Image, Vec2};
+use eframe::egui::{vec2, FontData, FontFamily, Image, Vec2};
+use eframe::{egui, App, CreationContext};
 use egui_extras::install_image_loaders;
 use reqwest::Client;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use serde::{Deserialize, Serialize};
 
 pub struct BiliTicket {
-    pub runtime: Arc<tokio::runtime::Runtime>,
+    pub runtime: tokio::runtime::Runtime,
     pub terminal_buffer: Arc<Mutex<String>>,
-    pub show_qr: bool,
+    pub show_login_qr: bool,
     pub login_qr_url: String,
     pub config: Config,
     pub logging: Arc<AtomicBool>,
+    pub show_paying_qr: bool,
     pub client: Arc<Client>,
     pub blocking_client: Arc<reqwest::blocking::Client>,
+    pub handler_order: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Config {
-    pub handler_order: bool,
     is_got_project: bool,
     project_image_url: String,
     pub project: Option<Project>,
@@ -34,6 +35,7 @@ pub struct Config {
     pub orders: Arc<Mutex<Vec<Order>>>,
     pub cookie: Arc<Mutex<String>>,
     pub is_login: Arc<AtomicBool>,
+    pub pay_code: String,
 }
 
 impl Default for Config {
@@ -47,8 +49,8 @@ impl Default for Config {
             user_head_img_url: String::default(),
             orders: Arc::new(Mutex::new(vec![])),
             cookie: Arc::new(Mutex::new(String::default())),
-            handler_order: false,
             is_login: Arc::new(AtomicBool::new(false)),
+            pay_code: String::default(),
         }
     }
 }
@@ -56,19 +58,19 @@ impl Default for Config {
 impl Default for BiliTicket {
     fn default() -> Self {
         BiliTicket {
+            handler_order: false,
             blocking_client: Arc::new(reqwest::blocking::Client::new()),
             client: Arc::new(Client::new()),
-            runtime: Arc::new(
-                tokio::runtime::Builder::new_multi_thread()
-                    .enable_all()
-                    .build()
-                    .unwrap(),
-            ),
+            runtime: tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .unwrap(),
             terminal_buffer: Arc::new(Mutex::new(String::default())),
-            show_qr: false,
+            show_login_qr: false,
             login_qr_url: String::default(),
             config: load_config(),
             logging: Arc::new(AtomicBool::new(false)),
+            show_paying_qr: false,
         }
     }
 }
@@ -101,7 +103,7 @@ impl BiliTicket {
 
     fn first_loading(&mut self) {
         if let Ok(mut f) = File::open("./config.json") {
-            if let Ok(config) =serde_json::from_reader(f) {
+            if let Ok(config) = serde_json::from_reader(f) {
                 self.config = config;
             }
         }
@@ -137,6 +139,7 @@ impl BiliTicket {
                                 });
 
                                 if flag {
+                                    ctx.forget_image(&self.config.project_image_url);
                                     self.config.project_image_url =
                                         self.config.project.clone().unwrap().performance_image;
                                     self.config.is_got_project = true;
@@ -169,28 +172,55 @@ impl BiliTicket {
                     ui.add(Image::from_uri(self.login_qr_url.clone()));
                 }
                 if self.config.is_login.load(Ordering::Relaxed) == true {
-                    if self.config.handler_order == false {
+                    ctx.forget_image(&self.login_qr_url);
+                    if self.handler_order == false {
                         self.print_terminal("加载用户昵称和头像...\n");
                         self.print_terminal("加载订单数据...\n");
                         self.get_user_head();
                         self.handler_orders();
-                        self.config.handler_order = true;
+                        self.handler_order = true;
                     }
 
                     egui::SidePanel::left("user_head panel").show_inside(ui, |ui| {
                         ui.heading(self.config.user_name.clone());
                         ui.add(Image::from_uri(self.config.user_head_img_url.clone()));
                     });
-
+                    let height = ui.available_size().y;
                     egui::ScrollArea::vertical()
                         .auto_shrink(false)
                         .show(ui, |ui| {
-                            for order in &*self.config.orders.lock().unwrap() {
-                                ui.horizontal_wrapped(|ui| {
-                                    ui.add(egui::Label::new(order.item_info.name.clone()));
-                                    ui.add(egui::Label::new(order.sub_status_name.clone()));
+                            ui.horizontal(|ui| {
+                                ui.vertical(|ui| {
+                                    let orders = self.config.orders.lock().unwrap().clone();
+                                    for order in orders {
+                                        ui.horizontal_wrapped(|ui| {
+                                            ui.label(order.item_info.name.clone());
+                                            ui.label(order.sub_status_name.clone());
+                                            if order.sub_status_name.clone() == "待支付" {
+                                                if ui.link("点此显示付款二维码").clicked()
+                                                {
+                                                    ctx.forget_image(&self.config.pay_code);
+                                                    self.print_terminal("请求付款二维码...\n");
+                                                    if self.do_paying(order.order_id.clone()) {
+                                                        self.show_paying_qr = true;
+                                                    }
+                                                }
+                                                if ui.link("取消订单").clicked() {
+                                                    self.cancel_order(&order.order_id);
+                                                }
+                                            }
+                                        });
+                                    }
                                 });
-                            }
+                                ui.vertical(|ui| {
+                                    if self.show_paying_qr {
+                                        ui.add_sized(
+                                            vec2(height, height),
+                                            Image::from_uri(&self.config.pay_code),
+                                        );
+                                    }
+                                });
+                            });
                         });
                 }
             });
@@ -219,7 +249,7 @@ impl BiliTicket {
     }
 }
 
-impl eframe::App for BiliTicket {
+impl App for BiliTicket {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.ui_menu(ctx);
         self.ui_ticket(ctx);

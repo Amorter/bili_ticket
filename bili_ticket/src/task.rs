@@ -1,5 +1,8 @@
 use crate::app::{BiliTicket, Config};
-use bili_lib::{generate_qrcode, nav_info, order_list_shows, project_info, qrcode_login};
+use bili_lib::{
+    cancel_order, generate_qrcode, nav_info, order_list_shows, pay_param, project_info,
+    qrcode_login,
+};
 use reqwest::header::{HeaderMap, COOKIE};
 use serde_json::Error;
 use std::sync::atomic::Ordering;
@@ -12,6 +15,20 @@ pub fn load_config() -> Config {
 }
 
 impl BiliTicket {
+    pub fn cancel_order(&self, order_id: &String) {
+        match self
+            .runtime
+            .block_on(cancel_order(&self.client, self.build_headers(), order_id))
+        {
+            Ok(_) => {
+                self.print_terminal("取消订单成功!\n");
+            }
+            Err(_) => {
+                self.print_terminal("取消订单失败，可能是订单不存在?\n");
+            }
+        };
+    }
+
     pub fn print_terminal(&self, str: &str) {
         let tb = Arc::clone(&self.terminal_buffer);
         if !tb.lock().unwrap().ends_with("\n") {
@@ -20,6 +37,24 @@ impl BiliTicket {
         tb.lock().unwrap().push_str(str);
     }
 
+    pub fn do_paying(&mut self, order_id: String) -> bool {
+        match self
+            .runtime
+            .block_on(pay_param(&self.client, self.build_headers(), &order_id))
+        {
+            Ok(url) => {
+                self.config.pay_code = format!(
+                    "https://api.pwmqr.com/qrcode/create/?url={}",
+                    url.replace("&", "%26")
+                );
+                true
+            }
+            Err(_) => {
+                self.print_terminal("请求支付码失败，可能是订单不存在?\n");
+                false
+            }
+        }
+    }
     pub fn do_login(&mut self) {
         let (url, qrcode_key) = self.runtime.block_on(generate_qrcode(&self.client));
         // let qrcode = QRBuilder::new(url).build().unwrap();
@@ -34,14 +69,13 @@ impl BiliTicket {
             url.replace("&", "%26")
         );
         self.print_terminal("请扫描二维码登录:\n");
-        self.show_qr = true;
+        self.show_login_qr = true;
         let logging = Arc::clone(&self.logging);
         let tb = Arc::clone(&self.terminal_buffer);
         let c = Arc::clone(&self.config.cookie);
-        let rt = Arc::clone(&self.runtime);
         let cl = Arc::clone(&self.client);
         let is_l = Arc::clone(&self.config.is_login);
-        rt.spawn(async move {
+        self.runtime.spawn(async move {
             loop {
                 sleep(Duration::from_secs(3)).await;
                 let (code, msg, cookie) = qrcode_login(&cl, &qrcode_key).await;
@@ -62,11 +96,10 @@ impl BiliTicket {
     }
 
     pub fn handler_orders(&self) {
-        let rt = Arc::clone(&self.runtime);
         let cl = Arc::clone(&self.client);
         let orders = Arc::clone(&self.config.orders);
         let headers = self.build_headers();
-        rt.spawn(async move {
+        self.runtime.spawn(async move {
             loop {
                 let res = order_list_shows(&cl, headers.clone()).await;
                 *orders.lock().unwrap() = res;

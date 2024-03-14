@@ -1,9 +1,9 @@
-use reqwest::header::{HeaderMap, HeaderValue};
+use reqwest::header::HeaderMap;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Error;
-use std::rc::Rc;
 use std::string::ToString;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Buyer {
@@ -45,7 +45,7 @@ pub struct Img {
 }
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Order {
-    order_id: String,
+    pub order_id: String,
     uid: String,
     order_type: i32,
     item_id: i32,
@@ -108,6 +108,66 @@ pub struct Ticket {
     screen_name: String,
     #[serde(rename = "clickable")]
     click_able: bool,
+}
+
+pub async fn cancel_order(
+    client: &Client,
+    headers: HeaderMap,
+    order_id: &String,
+) -> Result<(), ()> {
+    let res = client
+        .get("https://show.bilibili.com/api/ticket/order/cancel?order_id=".to_string() + order_id)
+        .headers(headers)
+        .send()
+        .await
+        .unwrap();
+    let json = res.json::<serde_json::Value>().await.unwrap();
+    let errno = json.get("errno").unwrap();
+    if errno.as_i64().unwrap() == 0 {
+        Ok(())
+    } else {
+        Err(())
+    }
+}
+
+pub async fn pay_param(
+    client: &Client,
+    headers: HeaderMap,
+    order_id: &String,
+) -> Result<String, ()> {
+    let res = client
+        .get(
+            "https://show.bilibili.com/api/ticket/order/getPayParam?order_id=".to_string()
+                + order_id,
+        )
+        .headers(headers)
+        .send()
+        .await
+        .unwrap();
+    let json = res.json::<serde_json::Value>().await.unwrap();
+    let data = json.get("data").unwrap();
+    if let Some(url) = data.get("code_url") {
+        return Ok(url.as_str().unwrap().to_string());
+    } else {
+        return Err(());
+    }
+}
+
+pub async fn order_info(client: &Client, headers: HeaderMap, order_id: String) -> Order {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+    let res = client
+        .get(format!(
+            "https://show.bilibili.com/api/ticket/order/info?order_id={}&timestamp={}",
+            order_id, timestamp
+        ))
+        .headers(headers)
+        .send()
+        .await
+        .unwrap();
+    res.json::<Order>().await.unwrap()
 }
 
 pub async fn order_prepare(client: &Client, headers: HeaderMap) {
