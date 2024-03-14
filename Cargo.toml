@@ -1,0 +1,6 @@
+[workspace]
+resolver = "2"
+members = [
+    "bili_ticket",
+    "bili_lib",
+]
