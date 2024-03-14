@@ -21,7 +21,7 @@ impl BiliTicket {
     }
 
     pub fn do_login(&mut self) {
-        let (url, qrcode_key) = self.runtime.block_on(generate_qrcode(&self.config.client));
+        let (url, qrcode_key) = self.runtime.block_on(generate_qrcode(&self.client));
         // let qrcode = QRBuilder::new(url).build().unwrap();
         // self.login_qr = ImageBuilder::default()
         //     .shape(Shape::RoundedSquare)
@@ -39,7 +39,7 @@ impl BiliTicket {
         let tb = Arc::clone(&self.terminal_buffer);
         let c = Arc::clone(&self.config.cookie);
         let rt = Arc::clone(&self.runtime);
-        let cl = Arc::clone(&self.config.client);
+        let cl = Arc::clone(&self.client);
         let is_l = Arc::clone(&self.config.is_login);
         rt.spawn(async move {
             loop {
@@ -63,7 +63,7 @@ impl BiliTicket {
 
     pub fn handler_orders(&self) {
         let rt = Arc::clone(&self.runtime);
-        let cl = Arc::clone(&self.config.client);
+        let cl = Arc::clone(&self.client);
         let orders = Arc::clone(&self.config.orders);
         let headers = self.build_headers();
         rt.spawn(async move {
@@ -78,14 +78,14 @@ impl BiliTicket {
     pub fn get_user_head(&mut self) {
         let (uname, face_img) = self
             .runtime
-            .block_on(nav_info(&self.config.client, self.build_headers()));
+            .block_on(nav_info(&self.client, self.build_headers()));
         self.config.user_name = uname;
         self.config.user_head_img_url = face_img;
     }
 
     pub fn get_project(&mut self) -> Result<(), Error> {
         let project = self.runtime.block_on(project_info(
-            &self.config.client,
+            &self.client,
             self.config.target_project.parse().unwrap(),
         ))?;
         self.config.project = Option::from(project.clone());

@@ -1,22 +1,30 @@
 use crate::task::load_config;
 use bili_lib::{Order, Project};
-use eframe::egui;
-use eframe::egui::{FontData, FontFamily, Image, Sense, Vec2};
+use eframe::{App, CreationContext, egui, Storage};
+use eframe::egui::{FontData, FontFamily, Image, Vec2};
 use egui_extras::install_image_loaders;
 use reqwest::Client;
 use std::fs;
+use std::fs::File;
+use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use serde::{Deserialize, Serialize};
+
 pub struct BiliTicket {
     pub runtime: Arc<tokio::runtime::Runtime>,
     pub terminal_buffer: Arc<Mutex<String>>,
     pub show_qr: bool,
     pub login_qr_url: String,
-    pub handler_order: bool,
     pub config: Config,
     pub logging: Arc<AtomicBool>,
+    pub client: Arc<Client>,
+    pub blocking_client: Arc<reqwest::blocking::Client>,
 }
+
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Config {
+    pub handler_order: bool,
     is_got_project: bool,
     project_image_url: String,
     pub project: Option<Project>,
@@ -25,8 +33,6 @@ pub struct Config {
     pub user_head_img_url: String,
     pub orders: Arc<Mutex<Vec<Order>>>,
     pub cookie: Arc<Mutex<String>>,
-    pub client: Arc<Client>,
-    pub blocking_client: Arc<reqwest::blocking::Client>,
     pub is_login: Arc<AtomicBool>,
 }
 
@@ -41,8 +47,7 @@ impl Default for Config {
             user_head_img_url: String::default(),
             orders: Arc::new(Mutex::new(vec![])),
             cookie: Arc::new(Mutex::new(String::default())),
-            client: Arc::new(Client::new()),
-            blocking_client: Arc::new(reqwest::blocking::Client::new()),
+            handler_order: false,
             is_login: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -51,6 +56,8 @@ impl Default for Config {
 impl Default for BiliTicket {
     fn default() -> Self {
         BiliTicket {
+            blocking_client: Arc::new(reqwest::blocking::Client::new()),
+            client: Arc::new(Client::new()),
             runtime: Arc::new(
                 tokio::runtime::Builder::new_multi_thread()
                     .enable_all()
@@ -60,7 +67,6 @@ impl Default for BiliTicket {
             terminal_buffer: Arc::new(Mutex::new(String::default())),
             show_qr: false,
             login_qr_url: String::default(),
-            handler_order: false,
             config: load_config(),
             logging: Arc::new(AtomicBool::new(false)),
         }
@@ -68,7 +74,7 @@ impl Default for BiliTicket {
 }
 
 impl BiliTicket {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &CreationContext<'_>) -> Self {
         install_image_loaders(&cc.egui_ctx);
 
         let mut fonts = eframe::egui::FontDefinitions::default();
@@ -93,12 +99,26 @@ impl BiliTicket {
         bili_ticket
     }
 
-    fn first_loading(&mut self) {}
+    fn first_loading(&mut self) {
+        if let Ok(mut f) = File::open("./config.json") {
+            if let Ok(config) =serde_json::from_reader(f) {
+                self.config = config;
+            }
+        }
+    }
 
-    fn ui_menu(&self, ctx: &egui::Context) {
+    fn ui_menu(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("menu panel")
             .resizable(true)
-            .show(ctx, |ui| {});
+            .show(ctx, |ui| {
+                egui::menu::bar(ui, |ui| {
+                    ui.menu_button("账户", |ui| {
+                        if ui.button("更换账户").clicked() {
+                            self.config = Config::default();
+                        }
+                    });
+                });
+            });
     }
     fn ui_ticket(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -112,7 +132,7 @@ impl BiliTicket {
                                 self.print_terminal("加载票品信息...\n");
                                 let mut flag = true;
                                 self.get_project().unwrap_or_else(|_| {
-                                    self.print_terminal("载入商品信息失败,可能是票品不存在\n");
+                                    self.print_terminal("载入票品信息失败,可能是票品不存在\n");
                                     flag = false;
                                 });
 
@@ -149,12 +169,12 @@ impl BiliTicket {
                     ui.add(Image::from_uri(self.login_qr_url.clone()));
                 }
                 if self.config.is_login.load(Ordering::Relaxed) == true {
-                    if self.handler_order == false {
+                    if self.config.handler_order == false {
                         self.print_terminal("加载用户昵称和头像...\n");
                         self.print_terminal("加载订单数据...\n");
                         self.get_user_head();
                         self.handler_orders();
-                        self.handler_order = true;
+                        self.config.handler_order = true;
                     }
 
                     egui::SidePanel::left("user_head panel").show_inside(ui, |ui| {
@@ -206,5 +226,10 @@ impl eframe::App for BiliTicket {
         self.ui_terminal(ctx);
         self.ui_argument(ctx);
         self.ui_order(ctx);
+        if ctx.input(|i| i.viewport().close_requested()) {
+            let mut file = File::create("./config.json").unwrap();
+            let json = serde_json::to_string(&self.config).unwrap();
+            file.write_all(json.as_ref()).unwrap();
+        }
     }
 }
