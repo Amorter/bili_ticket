@@ -166,13 +166,22 @@ impl BiliTicket {
                 ui.vertical(|ui| {
                     if self.config.is_got_project {
                         for screen in self.config.project.clone().unwrap().screen_list {
-                            if ui.button(screen.name.clone()).clicked() {
+                            let mut but = egui::Button::new(screen.name.clone());
+                            if self.config.screen_name == screen.name {
+                                but = but.selected(true);
+                            }
+
+                            if ui.add(but).clicked() {
                                 self.config.screen_name = screen.name.clone();
                             }
                             if screen.name == self.config.screen_name {
                                 ui.horizontal(|ui| {
                                     for ticket in screen.ticket_list {
-                                        if ui.button(ticket.desc.clone()).clicked() {
+                                        let mut but = egui::Button::new(ticket.desc.clone());
+                                        if self.config.ticket.desc == ticket.desc {
+                                            but =  but.selected(true);
+                                        }
+                                        if ui.add(but).clicked() {
                                             self.config.ticket = ticket;
                                             self.config.is_select_ticket = true;
                                         }
