@@ -1,3 +1,4 @@
+//#![windows_subsystem = "windows"]
 use crate::app::BiliTicket;
 use eframe::Theme;
 

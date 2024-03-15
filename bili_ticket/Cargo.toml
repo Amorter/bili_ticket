@@ -18,5 +18,3 @@ bili_lib = { path = "../bili_lib" }
 
 
 [profile.release]
-lto = true
-panic = 'abort'

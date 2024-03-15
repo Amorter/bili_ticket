@@ -96,7 +96,7 @@ pub struct Screen {
     screen_type: i32,
     pub ticket_list: Vec<Ticket>,
 }
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Default)]
 pub struct Ticket {
     id: i64,
     pub price: i64,
