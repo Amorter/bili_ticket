@@ -2,3 +2,4 @@
 /Cargo.lock
 /.idea
 /config.json
+/bili_ticket/src/test.rs

@@ -4,6 +4,8 @@ use eframe::Theme;
 
 mod app;
 mod task;
+#[cfg(test)]
+mod test;
 
 fn main() {
     let mut native_options = eframe::NativeOptions::default();

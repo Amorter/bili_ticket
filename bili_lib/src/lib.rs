@@ -1,6 +1,7 @@
 use reqwest::header::HeaderMap;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Error;
 use std::string::ToString;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -74,6 +75,8 @@ pub struct Order {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Project {
+    pub buyer_info: String, //“2,1”为实名认证
+    pub need_contact: i32,  //需要联系人表单吗
     pub name: String,
     status: i32,
     is_sale: i32,
@@ -87,7 +90,8 @@ pub struct Project {
 }
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Screen {
-    id: i64,
+    pub id: i64,
+    pub delivery_type: i32, //配送方式，1为电子票，3为纸质票
     start_time: u64,
     pub name: String,
     #[serde(rename = "type")]
@@ -98,8 +102,9 @@ pub struct Screen {
 }
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct Ticket {
-    id: i64,
-    pub price: i64,
+    pub id: i64,
+    pub anonymous_buy: bool, //匿名购买
+    pub price: u64,
     pub desc: String,
     sale_start: String,
     sale_end: String,
@@ -108,6 +113,70 @@ pub struct Ticket {
     screen_name: String,
     #[serde(rename = "clickable")]
     click_able: bool,
+}
+#[derive(Serialize, Clone, Default)]
+pub struct PrepareForm {
+    pub project_id: i64,
+    pub screen_id: i64,
+    pub sku_id: i64,
+    pub order_type: i32,
+    pub count: u8,
+}
+
+pub struct CreateForm {
+    pub project_id: i64,
+    pub screen_id: i64,
+    pub sku_id: i64,
+    pub count: u8,
+    pub pay_money: u64,
+    pub order_type: i32,
+    pub timestamp: u128,
+    pub token: String,
+    //#[serde(rename = "deviceId")]
+    pub device_id: String,
+    //#[serde(rename = "clickPosition")]
+    pub click_position: ClickPosition,
+    //#[serde(rename = "new_risk")]
+    pub new_risk: bool,
+    //#[serde(rename = "requestSource")]
+    pub request_source: String, //电脑为pc-new
+    pub buyer: String,          //联系人姓名
+    pub tel: String,            //联系人电话
+}
+
+#[derive(Serialize)]
+pub struct ClickPosition {
+    pub x: u32,
+    pub y: u32,
+    pub origin: u128, //点击按钮时候的时间戳
+    pub now: u128,    //发送请求时候的时间戳
+}
+
+impl Serialize for CreateForm {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_struct("createForm", 14)?;
+        state.serialize_field("project_id", &self.project_id)?;
+        state.serialize_field("screen_id", &self.screen_id)?;
+        state.serialize_field("sku_id", &self.sku_id)?;
+        state.serialize_field("count", &self.count)?;
+        state.serialize_field("pay_money", &self.pay_money)?;
+        state.serialize_field("order_type", &self.order_type)?;
+        state.serialize_field("timestamp", &self.timestamp)?;
+        state.serialize_field("token", &self.token)?;
+        state.serialize_field("deviceId", &self.device_id)?;
+        state.serialize_field(
+            "clickPosition",
+            &serde_json::to_string(&self.click_position).unwrap(),
+        )?;
+        state.serialize_field("newRisk", &self.new_risk)?;
+        state.serialize_field("requestSource", &self.request_source)?;
+        state.serialize_field("buyer", &self.buyer)?;
+        state.serialize_field("tel", &self.tel)?;
+        state.end()
+    }
 }
 
 pub async fn cancel_order(
@@ -170,12 +239,43 @@ pub async fn order_info(client: &Client, headers: HeaderMap, order_id: String) -
     res.json::<Order>().await.unwrap()
 }
 
-pub async fn order_prepare(client: &Client, headers: HeaderMap) {
-    client.get("https://show.bilibili.com/api/ticket/order/prepare");
+pub async fn order_prepare(
+    client: &Client,
+    headers: HeaderMap,
+    prepare_form: &PrepareForm,
+) -> Result<String, ()> {
+    let res = client
+        .post("https://show.bilibili.com/api/ticket/order/prepare")
+        .headers(headers)
+        .form(prepare_form)
+        .send()
+        .await
+        .unwrap();
+    let json = res.json::<serde_json::Value>().await.unwrap();
+    let data = json.get("data").unwrap();
+    let token = data.get("token").unwrap().as_str().unwrap().to_string();
+    Ok(token)
 }
 
-pub async fn order_create(client: &Client, headers: HeaderMap) {
-    client.get("https://show.bilibili.com/api/ticket/order/createV2");
+pub async fn order_create(
+    client: &Client,
+    headers: HeaderMap,
+    create_form: &CreateForm,
+) -> Result<u64, String> {
+    let res = client
+        .post("https://show.bilibili.com/api/ticket/order/createV2")
+        .headers(headers)
+        .form(create_form)
+        .send()
+        .await
+        .unwrap();
+    let json = res.json::<serde_json::Value>().await.unwrap();
+    let data = json.get("data").unwrap();
+    if let Some(order_id) = data.get("orderId") {
+        Ok(order_id.as_u64().unwrap())
+    } else {
+        Err(json.get("msg").unwrap().as_str().unwrap().to_string())
+    }
 }
 
 pub async fn nav_info(client: &Client, headers: HeaderMap) -> (String, String) {
@@ -288,15 +388,4 @@ pub async fn project_info(client: &Client, project_id: u64) -> Result<Project, E
     project.performance_image = performance_image_url;
 
     Ok(project)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn it_works() {
-        let (url, qrcode_key) = generate_qrcode(&Client::new()).await;
-        println!("url: {}\nqrcode_key: {}", url, qrcode_key);
-    }
 }

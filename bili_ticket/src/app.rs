@@ -1,5 +1,5 @@
 use crate::task::load_config;
-use bili_lib::{Order, Project, Ticket};
+use bili_lib::{ClickPosition, CreateForm, Order, PrepareForm, Project, Ticket};
 use eframe::egui::{vec2, FontData, FontFamily, Image, Vec2};
 use eframe::{egui, App, CreationContext};
 use egui_extras::install_image_loaders;
@@ -10,6 +10,21 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[derive(Serialize, Deserialize, Clone)]
+pub enum OrderType {
+    Anonymous,
+    NamePhone,
+    Deliver,
+    Buyer,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct NamePhoneForm {
+    pub name: String,
+    pub phone: String,
+}
 
 pub struct BiliTicket {
     pub runtime: tokio::runtime::Runtime,
@@ -20,15 +35,19 @@ pub struct BiliTicket {
     pub logging: Arc<AtomicBool>,
     pub client: Arc<Client>,
     pub blocking_client: Arc<reqwest::blocking::Client>,
-    pub handler_order: bool,
+    pub handler_order: Arc<AtomicBool>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Config {
+    ticket_count: String,
+    anonymous_form: NamePhoneForm,
+    loaded_user_head: bool,
+    pub order_type: OrderType,
     select_order_id: String,
     is_select_ticket: bool,
-    ticket: Ticket,
-    screen_name: String,
+    pub ticket: Ticket,
+    screen_id: i64,
     is_got_project: bool,
     project_image_url: String,
     pub show_paying_qr: bool,
@@ -45,10 +64,14 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
+            ticket_count: String::from("1"),
+            anonymous_form: NamePhoneForm::default(),
+            loaded_user_head: false,
+            order_type: OrderType::Anonymous,
             select_order_id: String::default(),
             is_select_ticket: false,
             ticket: Ticket::default(),
-            screen_name: String::default(),
+            screen_id: 0,
             is_got_project: false,
             project_image_url: String::default(),
             project: None,
@@ -67,7 +90,7 @@ impl Default for Config {
 impl Default for BiliTicket {
     fn default() -> Self {
         BiliTicket {
-            handler_order: false,
+            handler_order: Arc::new(AtomicBool::new(false)),
             blocking_client: Arc::new(reqwest::blocking::Client::new()),
             client: Arc::new(Client::new()),
             runtime: tokio::runtime::Builder::new_multi_thread()
@@ -125,6 +148,7 @@ impl BiliTicket {
                     ui.menu_button("账户", |ui| {
                         if ui.button("更换账户").clicked() {
                             self.config = Config::default();
+                            self.handler_order.store(false, Ordering::Relaxed);
                         }
                     });
                 });
@@ -139,6 +163,7 @@ impl BiliTicket {
                             ui.label("请输入票品id");
                             ui.text_edit_singleline(&mut self.config.target_project);
                             if ui.button("确认").clicked() {
+                                self.config.is_select_ticket = false;
                                 self.print_terminal("加载票品信息...\n");
                                 let mut flag = true;
                                 self.get_project().unwrap_or_else(|_| {
@@ -165,28 +190,97 @@ impl BiliTicket {
                 });
                 ui.vertical(|ui| {
                     if self.config.is_got_project {
-                        for screen in self.config.project.clone().unwrap().screen_list {
-                            let mut but = egui::Button::new(screen.name.clone());
-                            if self.config.screen_name == screen.name {
-                                but = but.selected(true);
-                            }
+                        let mut ticket_list: Vec<Ticket> = vec![];
+                        ui.horizontal(|ui| {
+                            for screen in self.config.project.clone().unwrap().screen_list {
+                                let mut but = egui::Button::new(screen.name.clone());
+                                if self.config.screen_id == screen.id {
+                                    but = but.selected(true);
+                                }
 
-                            if ui.add(but).clicked() {
-                                self.config.screen_name = screen.name.clone();
+                                if ui.add(but).clicked() {
+                                    self.config.screen_id = screen.id;
+                                }
+
+                                if screen.id == self.config.screen_id {
+                                    ticket_list = screen.ticket_list;
+                                }
                             }
-                            if screen.name == self.config.screen_name {
-                                ui.horizontal(|ui| {
-                                    for ticket in screen.ticket_list {
-                                        let mut but = egui::Button::new(ticket.desc.clone());
-                                        if self.config.ticket.desc == ticket.desc {
-                                            but =  but.selected(true);
+                        });
+                        ui.horizontal(|ui| {
+                            for ticket in ticket_list {
+                                let mut but = egui::Button::new(ticket.desc.clone());
+                                if self.config.ticket.id == ticket.id {
+                                    but = but.selected(true);
+                                }
+                                if ui.add(but).clicked() {
+                                    self.config.ticket = ticket;
+                                    self.config.is_select_ticket = true;
+                                }
+                            }
+                        });
+
+                        if self.config.is_select_ticket {
+                            match self.config.order_type {
+                                OrderType::NamePhone => {
+                                    ui.horizontal(|ui| {
+                                        ui.vertical(|ui| {
+                                            ui.label("姓名");
+                                            ui.text_edit_singleline(
+                                                &mut self.config.anonymous_form.name,
+                                            );
+                                        });
+                                        ui.vertical(|ui| {
+                                            ui.label("手机号");
+                                            ui.text_edit_singleline(
+                                                &mut self.config.anonymous_form.phone,
+                                            );
+                                        });
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label("购买数量");
+                                        if ui.button("-").clicked() {
+                                            self.config.ticket_count =
+                                                (self.config.ticket_count.parse::<u8>().unwrap()
+                                                    - 1)
+                                                .to_string();
                                         }
-                                        if ui.add(but).clicked() {
-                                            self.config.ticket = ticket;
-                                            self.config.is_select_ticket = true;
+                                        ui.add_sized(
+                                            vec2(100.0, 20.0),
+                                            egui::TextEdit::singleline(
+                                                &mut self.config.ticket_count,
+                                            ),
+                                        );
+                                        if ui.button("+").clicked() {
+                                            self.config.ticket_count =
+                                                (self.config.ticket_count.parse::<u8>().unwrap()
+                                                    + 1)
+                                                .to_string();
                                         }
-                                    }
-                                });
+                                    });
+                                    ui.horizontal(|ui| {
+                                        if ui.button("立即购票").clicked() {
+                                            let prepare_form = PrepareForm {
+                                                project_id: self
+                                                    .config
+                                                    .target_project
+                                                    .parse()
+                                                    .unwrap(),
+                                                screen_id: self.config.screen_id,
+                                                order_type: 1,
+                                                count: self.config.ticket_count.parse().unwrap(),
+                                                sku_id: self.config.ticket.id,
+                                            };
+                                            self.buy_ticket_now(
+                                                &prepare_form,
+                                                &self.config.anonymous_form,
+                                            );
+                                        }
+                                    });
+                                }
+                                OrderType::Buyer => {}
+                                OrderType::Deliver => {}
+                                OrderType::Anonymous => {}
                             }
                         }
                     }
@@ -209,12 +303,15 @@ impl BiliTicket {
                 }
                 if self.config.is_login.load(Ordering::Relaxed) == true {
                     ctx.forget_image(&self.login_qr_url);
-                    if self.handler_order == false {
+                    if !self.config.loaded_user_head {
                         self.print_terminal("加载用户昵称和头像...\n");
-                        self.print_terminal("加载订单数据...\n");
                         self.get_user_head();
+                        self.config.loaded_user_head = true;
+                    }
+                    if !self.handler_order.load(Ordering::Relaxed) {
+                        self.print_terminal("加载订单数据...\n");
                         self.handler_orders();
-                        self.handler_order = true;
+                        self.handler_order.store(true, Ordering::Relaxed);
                     }
 
                     egui::SidePanel::left("user_head panel").show_inside(ui, |ui| {
@@ -242,7 +339,8 @@ impl BiliTicket {
                                                         self.print_terminal("请求付款二维码...\n");
                                                         if self.do_paying(order.order_id.clone()) {
                                                             self.config.show_paying_qr = true;
-                                                            self.config.select_order_id = order.order_id.clone();
+                                                            self.config.select_order_id =
+                                                                order.order_id.clone();
                                                         }
                                                     }
                                                 } else {
@@ -251,7 +349,8 @@ impl BiliTicket {
                                                         self.print_terminal("删除缓存\n");
                                                         self.config.show_paying_qr = false;
                                                         self.config.pay_code = String::default();
-                                                        self.config.select_order_id = String::default();
+                                                        self.config.select_order_id =
+                                                            String::default();
                                                     }
                                                 }
 
