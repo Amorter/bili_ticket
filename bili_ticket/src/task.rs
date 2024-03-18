@@ -1,7 +1,7 @@
 use crate::app::{NamePhoneForm, BiliTicket, Config, OrderType};
 use bili_lib::{
     cancel_order, generate_qrcode, nav_info, order_create, order_list_shows, order_prepare,
-    pay_param, project_info, qrcode_login, ClickPosition, CreateForm, Order, PrepareForm,
+    pay_param, project_info, qrcode_login, ClickPosition, CreateForm, PrepareForm,
 };
 use reqwest::header::{HeaderMap, COOKIE};
 use serde_json::Error;
@@ -15,7 +15,23 @@ pub fn load_config() -> Config {
 }
 
 impl BiliTicket {
-    pub fn buy_ticket_now(&self, prepare_form: &PrepareForm, anonymous_form: &NamePhoneForm) {
+    pub fn buy_ticket_now(&self, prepare_form: &PrepareForm) {
+        match self.config.order_type {
+            OrderType::Anonymous => {
+
+            }
+            OrderType::NamePhone => {
+                self.name_phone_buy_now(&prepare_form, &self.config.name_phone_form);
+            }
+            OrderType::Deliver => {}
+            OrderType::Buyer => {}
+
+
+
+        }
+    }
+
+    fn name_phone_buy_now(&self, prepare_form: &PrepareForm, anonymous_form: &NamePhoneForm) {
         let token = self.prepare_order(prepare_form);
         //let regex = Regex::new(r"deviceFingerprint=<device_id>;").unwrap();
         //let cookie = self.config.cookie.lock().unwrap().to_string();

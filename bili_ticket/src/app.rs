@@ -1,5 +1,5 @@
 use crate::task::load_config;
-use bili_lib::{ClickPosition, CreateForm, Order, PrepareForm, Project, Ticket};
+use bili_lib::{Order, PrepareForm, Project, Ticket};
 use eframe::egui::{vec2, FontData, FontFamily, Image, Vec2};
 use eframe::{egui, App, CreationContext};
 use egui_extras::install_image_loaders;
@@ -10,7 +10,6 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Serialize, Deserialize, Clone)]
 pub enum OrderType {
@@ -41,7 +40,7 @@ pub struct BiliTicket {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Config {
     ticket_count: String,
-    anonymous_form: NamePhoneForm,
+    pub name_phone_form: NamePhoneForm,
     loaded_user_head: bool,
     pub order_type: OrderType,
     select_order_id: String,
@@ -65,7 +64,7 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             ticket_count: String::from("1"),
-            anonymous_form: NamePhoneForm::default(),
+            name_phone_form: NamePhoneForm::default(),
             loaded_user_head: false,
             order_type: OrderType::Anonymous,
             select_order_id: String::default(),
@@ -227,13 +226,13 @@ impl BiliTicket {
                                         ui.vertical(|ui| {
                                             ui.label("姓名");
                                             ui.text_edit_singleline(
-                                                &mut self.config.anonymous_form.name,
+                                                &mut self.config.name_phone_form.name,
                                             );
                                         });
                                         ui.vertical(|ui| {
                                             ui.label("手机号");
                                             ui.text_edit_singleline(
-                                                &mut self.config.anonymous_form.phone,
+                                                &mut self.config.name_phone_form.phone,
                                             );
                                         });
                                     });
@@ -260,21 +259,25 @@ impl BiliTicket {
                                     });
                                     ui.horizontal(|ui| {
                                         if ui.button("立即购票").clicked() {
-                                            let prepare_form = PrepareForm {
-                                                project_id: self
-                                                    .config
-                                                    .target_project
-                                                    .parse()
-                                                    .unwrap(),
-                                                screen_id: self.config.screen_id,
-                                                order_type: 1,
-                                                count: self.config.ticket_count.parse().unwrap(),
-                                                sku_id: self.config.ticket.id,
-                                            };
-                                            self.buy_ticket_now(
-                                                &prepare_form,
-                                                &self.config.anonymous_form,
-                                            );
+                                            if self.config.ticket_count.parse().unwrap() == 0 {
+                                                self.print_terminal("购买数量不能为0\n");
+                                            } else {
+                                                let prepare_form = PrepareForm {
+                                                    project_id: self
+                                                        .config
+                                                        .target_project
+                                                        .parse()
+                                                        .unwrap(),
+                                                    screen_id: self.config.screen_id,
+                                                    order_type: 1,
+                                                    count: self.config.ticket_count.parse().unwrap(),
+                                                    sku_id: self.config.ticket.id,
+                                                };
+                                                self.buy_ticket_now(
+                                                    &prepare_form,
+                                                    &self.config.name_phone_form,
+                                                );
+                                            }
                                         }
                                     });
                                 }
